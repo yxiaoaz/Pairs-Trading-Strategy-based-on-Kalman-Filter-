@@ -1,4 +1,10 @@
-def Initialize(self) -> None:
+'''
+Specify which assets' data are of our interest
+
+assets: the portfolio of pairs
+        list of tuples, [(0a,0b),(0c,0d),(0e,0f)], 
+'''
+def Initialize(self, assets) -> None:
 
     #1. Required: Five years of backtest history
     self.SetStartDate(2014, 1, 1)
@@ -12,11 +18,16 @@ def Initialize(self) -> None:
     #4. Required: Benchmark to SPY
     self.SetBenchmark("SPY")
 
-    self.assets = ["SCHO", "SHY"]
+    self.assets = assets
     
     # Add Equity ------------------------------------------------ 
+    '''
     for i in range(len(self.assets)):
         self.AddEquity(self.assets[i], Resolution.Minute)
+    '''
+    for asset_pair in self.assets:
+        self.AddEquity(asset_pair[0], Resolution.Minute)
+        self.AddEquity(asset_pair[1], Resolution.Minute)
         
     # Instantiate our model
     self.Recalibrate()
@@ -32,7 +43,7 @@ def Initialize(self) -> None:
     # Set Scheduled Event Method For Kalman Filter updating.
     self.Schedule.On(self.DateRules.EveryDay(), 
         self.TimeRules.BeforeMarketClose("SHY"), 
-        self.EveryDayBeforeMarketClose)
+        self.CalculateAndTrade)
         
         
 def Recalibrate(self) -> None:
@@ -109,7 +120,7 @@ def Recalibrate(self) -> None:
     self.trading_weight = coint_vector / np.sum(abs(coint_vector))
     
         
-def EveryDayBeforeMarketClose(self) -> None:
+def CalculateAndTrade(self) -> None:
     qb = self
     
     # Get the real-time log close price for all assets and store in a Series
