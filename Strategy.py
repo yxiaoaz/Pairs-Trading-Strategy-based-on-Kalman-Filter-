@@ -1,10 +1,10 @@
 '''
-Specify which assets' data are of our interest
-
-assets: the portfolio of pairs
-        list of tuples, [(0a,0b),(0c,0d),(0e,0f)], 
+TODO: 
+        PairFormation-> List[Tuple()], generate the pairs
+        Incorporate weights into CalculateAndTrade
 '''
-def Initialize(self, assets) -> None:
+
+def Initialize(self) -> None:
 
     #1. Required: Five years of backtest history
     self.SetStartDate(2014, 1, 1)
@@ -17,8 +17,14 @@ def Initialize(self, assets) -> None:
 
     #4. Required: Benchmark to SPY
     self.SetBenchmark("SPY")
+    
+    '''
+        Specify which assets' data are of our interest
 
-    self.assets = assets
+        assets: the portfolio of pairs
+                list of tuples, [(0a,0b),(0c,0d),(0e,0f)], 
+    '''
+    self.assets = self.PairFormation()
     
     # Add Equity ------------------------------------------------ 
     '''
@@ -40,12 +46,14 @@ def Initialize(self, assets) -> None:
         self.TimeRules.At(0, 0), 
         self.Recalibrate)
     
-    # Set Scheduled Event Method For Kalman Filter updating.
+    # Set Scheduled Event Method For Making Trading Decision.
     self.Schedule.On(self.DateRules.EveryDay(), 
         self.TimeRules.BeforeMarketClose("SHY"), 
         self.CalculateAndTrade)
-        
-        
+
+def PairFormation(self) -> List[Tuple()]:
+    #TODO
+
 def Recalibrate(self) -> None:
     qb = self
     history = qb.History(self.assets, 252*2, Resolution.Daily)
@@ -66,7 +74,10 @@ def Recalibrate(self) -> None:
     spread = log_price @ coint_vector
     
     ### Kalman Filter
-    # Initialize a Kalman Filter. Using the first 20 data points to optimize its initial state. We assume the market has no regime change so that the transitional matrix and observation matrix is [1].
+    '''
+    Initialize a Kalman Filter. Using the first 20 data points to optimize its initial state. 
+    We assume the market has no regime change so that the transitional matrix and observation matrix is [1].
+    '''
     self.kalmanFilter = KalmanFilter(transition_matrices = [1],
                         observation_matrices = [1],
                         initial_state_mean = spread.iloc[:20].mean(),
@@ -95,29 +106,6 @@ def Recalibrate(self) -> None:
     ### Determine Trading Threshold
     # Initialize 50 set levels for testing.
     s0 = np.linspace(0, max(normalized_spread), 50)
-    
-    # Calculate the profit levels using the 50 set levels.
-    f_bar = np.array([None]*50)
-    for i in range(50):
-        f_bar[i] = len(normalized_spread.values[normalized_spread.values > s0[i]]) \
-            / normalized_spread.shape[0]
-        
-    # Set trading frequency matrix.
-    D = np.zeros((49, 50))
-    for i in range(D.shape[0]):
-        D[i, i] = 1
-        D[i, i+1] = -1
-        
-    # Set level of lambda.
-    l = 1.0
-    
-    # Obtain the normalized profit level.
-    f_star = np.linalg.inv(np.eye(50) + l * D.T@D) @ f_bar.reshape(-1, 1)
-    s_star = [f_star[i]*s0[i] for i in range(50)]
-    self.threshold = s0[s_star.index(max(s_star))]
-    
-    # Set the trading weight. We would like the portfolio absolute total weight is 1 when trading.
-    self.trading_weight = coint_vector / np.sum(abs(coint_vector))
     
         
 def CalculateAndTrade(self) -> None:
