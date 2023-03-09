@@ -1,0 +1,5 @@
+energy_ETF=["VDE", "USO", "XES", "XOP", "UNG", "ICLN", "ERX","UCO", "AMJ", "BNO", "AMLP", "UGAZ", "TAN","ERY", "SCO", "DGAZ"]
+metal_ETF=["GLD", "IAU", "SLV", "GDX", "AGQ", "PPLT", "NUGT", "USLV", "UGLD", "JNUG","DUST", "JDST"]
+tech_ETF=["QQQ", "IGV", "QTEC", "FDN", "FXL", "TECL", "SOXL", "SKYY", "KWEB","TECS", "SOXS"]
+treasury_ETF=["IEF", "SHY", "TLT", "IEI", "TLH", "BIL", "SPTL","TMF", "SCHO", "SCHR", "SPTS", "GOVT","SHV", "TBT", "TBF", "TMV"]
+volatility_ETF=["TVIX", "VIXY", "SPLV", "UVXY", "EEMV", "EFAV", "USMV","SVXY"]
