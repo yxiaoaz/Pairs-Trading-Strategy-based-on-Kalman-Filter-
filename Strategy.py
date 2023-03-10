@@ -336,6 +336,8 @@ class KalmanPairsTrading(QCAlgorithm):
         if self.initialize==True:
             return
         for pair in self.assets:
+            if self.recalibrated_atleast_once[pair]==False:
+                self.Debug("First time recalibration for: "+pair[0]+" "+pair[1])
             self.Recalibrate_pairwise(pair)
     
     def Recalibrate_pairwise(self,pair):
@@ -412,12 +414,12 @@ class KalmanPairsTrading(QCAlgorithm):
     Call this function for each pair.
     pair: a tuple of two Symbol
     '''
-    def PairwiseCalculateAndTrade(self, pair,):
+    def PairwiseCalculateAndTrade(self, pair):
         # Get the real-time log close price for all assets and store in a Series
         series = pd.Series()
         for symbol in pair:
             series[symbol] = np.log(self.Securities[symbol].Close)
-        self.Debug("Current pair: "+pair[0]+" "+pair[1])
+        self.Debug("-----------------Current pair: "+pair[0]+" "+pair[1]+" -----------------------------")
         self.Debug("The normalized coint vectors of the pair are: "+str(self.pair_hedge_ratio[pair][0])+" and "+str(self.pair_hedge_ratio[pair][1]))
         # Get the spread
         spread = np.sum(series * self.pair_hedge_ratio[pair])
@@ -438,14 +440,14 @@ class KalmanPairsTrading(QCAlgorithm):
             self.Debug("The normalized_spread between "+pair[0]+" and "+pair[1]+" is "+str(normalized_spread))
             #self.Debug(self.Securities[pair[0]].Close)
             pair_0_qty = int(self.CalculateOrderQuantity(pair[0], self.relativeWeight(pair)))
-            ratio = self.pair_hedge_ratio[pair][1]/self.pair_hedge_ratio[pair][0]
+            ratio = abs(self.pair_hedge_ratio[pair][1]/self.pair_hedge_ratio[pair][0])
             pair_1_qty = floor(pair_0_qty*ratio)
 
             self.Debug("The quantity to long for "+pair[0]+" is "+str(pair_0_qty))
-            self.Debug("The quantity to short for "+pair[1]+" is -"+str(pair_1_qty))
+            self.Debug("The quantity to short for "+pair[1]+" is "+str(pair_1_qty))
             
-            if pair_0_qty>=1 and pair_1_qty>=1:
-                self.Debug("Do Trade")
+            if pair_0_qty>=1 and pair_1_qty>=1 and self.pair_trade_states[pair]!=1:
+                self.Debug("----Do Trade----")
                 
                 self.Sell(pair[1], pair_1_qty)
                 self.Buy(pair[0], pair_0_qty)
@@ -462,22 +464,23 @@ class KalmanPairsTrading(QCAlgorithm):
             self.Debug("Situation b:")
             self.Debug("The normalized_spread between "+pair[0]+" and "+pair[1]+" is "+str(normalized_spread))
             pair_1_qty = int(self.CalculateOrderQuantity(pair[1], self.relativeWeight(pair)))
-            ratio = self.pair_hedge_ratio[pair][0]/self.pair_hedge_ratio[pair][1]
+            ratio = abs(self.pair_hedge_ratio[pair][0]/self.pair_hedge_ratio[pair][1])
             pair_0_qty = floor(ratio*pair_1_qty)
 
             self.Debug("The quantity to long for "+pair[1]+" is "+str(pair_1_qty))
-            self.Debug("The quantity to short for "+pair[0]+" is -"+str(pair_0_qty))
+            self.Debug("The quantity to short for "+pair[0]+" is "+str(pair_0_qty))
 
-            if pair_0_qty>=1 and pair_1_qty>=1:
-                self.Debug("Do Trade")
+            if pair_0_qty>=1 and pair_1_qty>=1 and self.pair_trade_states[pair]!=-1:
+                self.Debug("----Do Trade----")
                 self.Sell(pair[0], pair_0_qty)
                 self.Buy(pair[1], pair_1_qty)
                 self.pair_trade_states[pair] = -1
                 
         # Out of position if spread recovered
-        elif self.pair_trade_states[pair] == 1 and normalized_spread > -self.pair_upper_threshold[pair] or self.pair_trade_states[pair] == -1 and normalized_spread < self.pair_upper_threshold[pair]:
+        elif (self.pair_trade_states[pair] == 1 and normalized_spread > -self.pair_upper_threshold[pair]) or (self.pair_trade_states[pair] == -1 and normalized_spread < self.pair_upper_threshold[pair]):
             #self.Liquidate()
             self.Debug("Situation c:")
             self.Liquidate(pair[0]) 
             self.Liquidate(pair[1])   
             self.pair_trade_states[pair] = 0
+        self.Debug("----------------------------------------------")
