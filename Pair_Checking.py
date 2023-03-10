@@ -186,6 +186,7 @@ def get_candidate_pairs(clustered_series, pricing_df, min_half_life=78,
         total_pairs_fail_criteria.append(pairs_fail_criteria)
 
     total_pairs_ranked = sorted(total_pairs, key=lambda tup: tup[2],reverse=pair_ranking_order)[:min(num_pairs,len(total_pairs))]
+    total_pairs_ranked = [(p[0],p[1]) for p in total_pairs_ranked]
     print('Found {} pairs'.format(len(total_pairs_ranked)))
     unique_tickers = np.unique([(element[0], element[1]) for element in total_pairs_ranked])
     print('The pairs contain {} unique tickers'.format(len(unique_tickers)))
