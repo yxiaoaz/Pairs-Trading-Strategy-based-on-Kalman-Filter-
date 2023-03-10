@@ -92,7 +92,8 @@ def check_properties(price_series,  p_value_threshold=0.1, min_half_life=78, max
 
     if pair_stats[0] == 0 and pair_stats[1] == 0:
         result = None
-        return result, criteria_not_verified
+        score=0
+        return result, criteria_not_verified, score
 
     elif pair_stats[0] == 0:  #-> (Y,X), needs to be reversed
         result = 1
