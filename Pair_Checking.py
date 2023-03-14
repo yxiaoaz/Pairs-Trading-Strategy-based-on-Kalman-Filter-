@@ -92,8 +92,8 @@ def check_properties(price_series,  p_value_threshold=0.1, min_half_life=78, max
 
     if pair_stats[0] == 0 and pair_stats[1] == 0:
         result = None
-        score=0
-        return result, criteria_not_verified, score
+        score = 0
+        return result, criteria_not_verified,score
 
     elif pair_stats[0] == 0:  #-> (Y,X), needs to be reversed
         result = 1
@@ -141,10 +141,25 @@ def find_pairs(data,p_value_threshold=0.1, min_half_life=78, max_half_life=20000
                 
                 pairs_fail_criteria[criteria_not_verified] += 1
                 if result is not None:
+                    candidate_pair = None
                     if result==1:
-                        pairs.append((keys[j], keys[i],score))
+                        candidate_pair=(keys[j], keys[i],score)
                     else:
-                        pairs.append((keys[i], keys[j],score))
+                        candidate_pair=(keys[i], keys[j],score)
+                    if len(pairs)==0:
+                        pairs.append(candidate_pair)
+                    else:
+                        for previous_pair in pairs:
+                            if keys[j] in previous_pair or keys[i] in previous_pair:
+                                if pair_ranking_order == False:
+                                    if candidate_pair[2]<previous_pair[2]:
+                                        pairs.remove(previous_pair)
+                                        pairs.append(candidate_pair)
+                                else:
+                                    if candidate_pair[2]>previous_pair[2]:
+                                        pairs.remove(previous_pair)
+                                        pairs.append(candidate_pair)
+
 
 
         return pairs, pairs_fail_criteria
