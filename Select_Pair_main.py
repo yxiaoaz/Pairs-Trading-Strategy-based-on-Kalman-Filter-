@@ -3,6 +3,7 @@ from AlgorithmImports import *
 from Clustering import *
 from Metrics import *
 from Pair_Checking import *
+from math import floor
 #endregion
 def remove_tickers_with_nan(df, threshold):
     """
@@ -25,15 +26,15 @@ def data_cleaning(df_price):
 '''
 df_price: the UNIVERSE, each row is a time tick, each column is a ticker, the entries are prices
 min_half_life:  minimium half life value of the spread to consider the pair
-                default = 78(number of points in a day)
+                default = 1(one day)
 max_half_life: 
-                default = 20000 (~number of points in a year: 78*252)
+                default = floor(252*0.5) (half a year)
 min_zero_crossings: minimium number of allowed zero crossings
 hurst_threshold: mimimium acceptable number for hurst threshold
 p_value_threshold:  pvalue threshold for a pair to be cointegrated
 '''
 def select_pair(df_price, subsample = 25, 
-                min_half_life = 78, max_half_life = 20000,
+                min_half_life = 1, max_half_life = floor(252*0.5),
                 min_zero_crosings = 12,
                  p_value_threshold = 0.1,
                  hurst_threshold=0.5,
