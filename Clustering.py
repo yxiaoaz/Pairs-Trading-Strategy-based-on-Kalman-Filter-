@@ -20,16 +20,7 @@ import matplotlib.cm as cm
 from sklearn.manifold import TSNE
 #endregion
 def apply_DBSCAN(eps, min_samples, X, df_returns):
-    """
-    This function applies a DBSCAN clustering algo
-    :param eps: min distance for a sample to be within the cluster
-    :param min_samples: min_samples to consider a cluster
-    :param X: data
-    :return: clustered_series_all: series with all tickers and labels
-    :return: clustered_series: series with tickers belonging to a cluster
-    :return: counts: counts of each cluster
-    :return: clf object
-    """
+
     clf = DBSCAN(eps=eps, min_samples=min_samples, metric='euclidean')
     #print(clf)
 
@@ -47,15 +38,7 @@ def apply_DBSCAN(eps, min_samples, X, df_returns):
     return clustered_series_all, clustered_series, counts, clf
 
 def apply_OPTICS(X, df_returns, min_samples, max_eps=2, xi=0.05, cluster_method='xi'):
-    """
-    :param X:
-    :param df_returns:
-    :param min_samples:
-    :param max_eps:
-    :param xi:
-    :param eps:
-    :return:
-    """
+
     clf = OPTICS(min_samples=min_samples, max_eps=max_eps, xi=xi, metric='euclidean', cluster_method=cluster_method)
     print(clf)
 
@@ -106,7 +89,7 @@ def plot_TSNE(X, clf, clustered_series_all):
     ax.tick_params(which='major', labelsize=18)
     #plt.axis('off')
 
-    # etfs in cluster
+
     labels = clf.labels_
     x = X_tsne[(labels!=-1), 0]
     y = X_tsne[(labels!=-1), 1]
@@ -122,23 +105,11 @@ def plot_TSNE(X, clf, clustered_series_all):
     for i, ticker in enumerate(tickers):
         plt.annotate(ticker, (x[i]-20, y[i]+12), size=15)
 
-    # remaining etfs, not clustered
+
     x = X_tsne[(clustered_series_all==-1).values, 0]
     y = X_tsne[(clustered_series_all==-1).values, 1]
     tickers = list(clustered_series_all[clustered_series_all == -1].index)
 
-    # WARNING: elimintate outliers
-    #outliers = ['DTO','SCO']
-    #outliers = ['DZZ', 'XME']
-    '''
-    to_remove_x = [x[clustered_series_all[clustered_series_all==-1].index.get_loc(outliers[0])],
-                   x[clustered_series_all[clustered_series_all==-1].index.get_loc(outliers[1])]]
-    to_remove_y = [y[clustered_series_all[clustered_series_all==-1].index.get_loc(outliers[0])],
-                   y[clustered_series_all[clustered_series_all==-1].index.get_loc(outliers[1])]]
-    x = np.array([i for i in x if i not in to_remove_x])
-    y= np.array([i for i in y if i not in to_remove_y])
-
-    '''
     
     plt.scatter(
         x,
@@ -158,5 +129,4 @@ def plot_TSNE(X, clf, clustered_series_all):
     #plt.savefig('DBSCAN_2014_2018_eps0_15.png', bbox_inches='tight', pad_inches=0.01)
     plt.savefig('OPTICS_2013_2017.png', bbox_inches='tight', pad_inches=0.1)
     plt.show()
-    # include connections - see quontopian
 # Your New Python File
