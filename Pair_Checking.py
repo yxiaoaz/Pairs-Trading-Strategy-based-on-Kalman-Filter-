@@ -16,11 +16,6 @@ def check_for_stationarity(X,subsample=25):
         result = adfuller(subsampled_X)
     else:
         result = adfuller(X)
-    # result contains:
-    # 0: t-statistic
-    # 1: p-value
-    # others: please see https://www.statsmodels.org/dev/generated/statsmodels.tsa.stattools.adfuller.html
-
     return {'t_statistic': result[0], 'p_value': result[1], 'critical_values': result[4]}
 
 def check_properties(price_series,  p_value_threshold=0.1, min_half_life=78, max_half_life=20000,
@@ -202,13 +197,13 @@ def get_candidate_pairs(clustered_series, pricing_df, min_half_life=78,
 
     total_pairs_ranked = sorted(total_pairs, key=lambda tup: tup[2],reverse=pair_ranking_order)[:min(num_pairs,len(total_pairs))]
     total_pairs_ranked = [(p[0],p[1]) for p in total_pairs_ranked]
-    print('Found {} pairs'.format(len(total_pairs_ranked)))
+    #print('Found {} pairs'.format(len(total_pairs_ranked)))
     unique_tickers = np.unique([(element[0], element[1]) for element in total_pairs_ranked])
-    print('The pairs contain {} unique tickers'.format(len(unique_tickers)))
+    #print('The pairs contain {} unique tickers'.format(len(unique_tickers)))
 
     # discarded
     review = dict(functools.reduce(operator.add, map(collections.Counter, total_pairs_fail_criteria)))
-    print('Pairs Selection failed stage: ', review)
+    #print('Pairs Selection failed stage: ', review)
 
     return total_pairs_ranked, unique_tickers
 
