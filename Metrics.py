@@ -50,13 +50,10 @@ def hurst(ts):
     """
     Returns the Hurst Exponent of the time series vector ts.
     Series vector ts should be a price series.
-    Source: https://www.quantstart.com/articles/Basics-of-Statistical-Mean-Reversion-Testing"""
+    """
     # Create the range of lag values
     lags = range(2, 100)
 
-    # Calculate the array of the variances of the lagged differences
-    # Here it calculates the variances, but why it uses
-    # standard deviation and then make a root of it?
     tau = [np.sqrt(np.std(np.subtract(ts[lag:], ts[:-lag]))) for lag in lags]
 
     # Use a linear fit to estimate the Hurst Exponent
@@ -66,10 +63,7 @@ def hurst(ts):
     return poly[0] * 2.0
 
 def variance_ratio(ts, lag=2):
-    """
-    Returns the variance ratio test result
-    Source: https://gist.github.com/jcorrius/56b4983ca059e69f2d2df38a3a05e225#file-variance_ratio-py
-    """
+ 
     # make sure we are working with an array, convert if necessary
     ts = np.asarray(ts)
 
@@ -82,10 +76,7 @@ def variance_ratio(ts, lag=2):
     return t / (lag * b)
 
 def zero_crossings( x):
-    """
-    Function that counts the number of zero crossings of a given signal
-    :param x: the signal to be analyzed
-    """
+
     x = x - x.mean()
     zero_crossings = sum(1 for i, _ in enumerate(x) if (i + 1 < len(x)) if ((x[i] * x[i + 1] < 0) or (x[i] == 0)))
 
