@@ -511,6 +511,7 @@ class KalmanPairsTrading(QCAlgorithm):
                         orders=[]
                         orders.append(pair[1],-1*capital)
                         orders.append(pair[0],(1/ratio)*capital)
+                        self.SetHoldings(orders)
                         #s= self.Sell(pair[1],floor(capital/self.Portfolio[pair[1]].Price))
                         #b=self.Buy(pair[0],floor(((1/ratio)*capital)/self.Portfolio[pair[0]].Price))
                         self.pair_trade_states[pair] = 1
@@ -521,6 +522,7 @@ class KalmanPairsTrading(QCAlgorithm):
                         orders.append(pair[0],capital)
                         #s=self.Sell(pair[1],floor(ratio*capital/self.Portfolio[pair[1]].Price))
                         #b=self.Buy(pair[0],floor(capital/self.Portfolio[pair[0]].Price))
+                        self.SetHoldings(orders)
                         self.pair_trade_states[pair] = 1
             elif normalized_spread/self.pair_upper_threshold[pair] > self.z_score_trade_threshold:
                 capital = self.relativeWeight(pair)*self.Portfolio.TotalPortfolioValue
@@ -530,7 +532,7 @@ class KalmanPairsTrading(QCAlgorithm):
                         orders=[]
                         orders.append(pair[1],(1/ratio)*capital)
                         orders.append(pair[0],-1*capital)
-                        
+                        self.SetHoldings(orders)
                         #s = self.Sell(pair[0],floor(((1/ratio)*capital)/self.Portfolio[pair[0]].Price))
                         #b=self.Buy(pair[1],floor(capital/self.Portfolio[pair[1]].Price))
                         self.pair_trade_states[pair] = -1
@@ -541,7 +543,7 @@ class KalmanPairsTrading(QCAlgorithm):
                         orders.append(pair[0],-1*ratio*capital)
                         #s=self.Sell(pair[0],floor(capital/self.Portfolio[pair[0]].Price))
                         #b=self.Buy(pair[1],floor(ratio*capital/self.Portfolio[pair[1]].Price))
-                        
+                        self.SetHoldings(orders)
                         self.pair_trade_states[pair] = -1
 
         # Out of position if spread recovered / get too extreme 
