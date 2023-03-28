@@ -1,3 +1,4 @@
+# region imports
 from AlgorithmImports import *
 from QuantConnect.DataSource import *
 from arch.unitroot.cointegration import engle_granger
@@ -24,14 +25,25 @@ class KalmanPairsTrading(QCAlgorithm):
         #industry_candidate_metric = market_cap   adjust manually
         self.pair_ranking_metric = 'p_value'# other: 'hurst_exponent', 'zero_cross', 'half_life','critical_val'
         self.pair_ranking_order = False # p_value:False, 
-        self.num_pairs = 5 #how many number of pairs to include in trading
+        self.num_pairs = 5 #how many number of pairs to include in trading 
         self.buffer_size = 0.4 # portion of position to be left as buffer
         #self.Settings.FreePortfolioValuePercentage = 0.1
         self.min_half_life = 1
         self.max_half_life = floor(252)
         self.formation_period = 252*2
-        ''''''
-        #
+        #risk management 
+        self.divergence_threshold = 5 
+        #self.maxDDpct = 0.5
+        #self.stopLossPercentage = 0.1
+        #self.currentValue = self.Portfolio.TotalPortfolioValue
+        #self.initialize = False
+        #if not self.initialize: 
+            #self.portfolioHigh = self.currentValue
+
+        #rolling 
+        self.month_counter = 0 # will +1 after every month
+        self.reselect_interval = 6  #reselect pairs every 12 months
+
         #Recorders for pairs
         self.recalibrated_atleast_once={}
         self.pair_weights={} #record the absolute weight of each pair
@@ -42,17 +54,16 @@ class KalmanPairsTrading(QCAlgorithm):
         self.pair_curr_mean={}
         self.pair_curr_var={}
         self.pair_upper_threshold={}
-        self.z_score_trade_threshold=2 #self.GetParameter("entry-z", 2)# to be multipled by upper_threshold
+        self.z_score_trade_threshold=2 #self.GetParameter("entry-z", 2)
         self.z_score_exit_threshold=0#self.GetParameter("exit-z",0)
-        
-        
+    
         
         self.initialize = True # a workaround for getting data...
         self.first_time_form_pair = True
         self.null_value_counts = {}
-        self.TradeStartYear = self.GetParameter("TradeStartYear",2007)
+        self.TradeStartYear = self.GetParameter("TradeStartYear",2010)
         self.SetStartDate(self.TradeStartYear, 1, 1)
-        self.SetEndDate(self.TradeStartYear+2 ,12, 31)  
+        self.SetEndDate(self.TradeStartYear+8,1, 1)  #<--------changed!!!!!!!!!!! to be only half yr for testing purpose 
         #2. Required: Alpha Streams Models:
         self.SetBrokerageModel(BrokerageName.AlphaStreams)
 
@@ -66,20 +77,43 @@ class KalmanPairsTrading(QCAlgorithm):
         self.AddEquity("SPY",Resolution.Minute)
         self.SetBenchmark("SPY")
 
+        '''# Crisis indicator 
+        self.vix = self.AddData(CBOE, 'VIX', Resolution.Daily).Symbol
+        self.vxv = self.AddData(CBOE, 'VIX3M', Resolution.Daily).Symbol
+        
+        self.vix_dayEnd = 1
+        self.vxv_dayEnd = 1
+
+        self.IVTS = 1 '''
 
         # Set Scheduled Event Method For Kalman Filter updating.
         self.Schedule.On(self.DateRules.MonthStart(), 
             self.TimeRules.BeforeMarketClose("SPY"), 
             self.Recalibrate)
 
-         #Set Scheduled Event Method For Making Trading Decision.
-        
+        '''#Set Scheduled Event Method For Making Trading Decision. 
+        self.Schedule.On(self.DateRules.EveryDay("SPY"), 
+            self.TimeRules.BeforeMarketClose("SPY"), 
+            self.Get_DayEnd_vxv_vix)'''
+            
+
         lagBeforeClose = self.GetParameter("lagBeforeClose",5)
+
         self.Schedule.On(self.DateRules.EveryDay("SPY"), 
             self.TimeRules.BeforeMarketClose("SPY",lagBeforeClose), 
-            self.CalculateAndTrade)
-
+            self.CalculateAndTrade) #<-------Calculate and trade called here
         
+        self.Schedule.On(self.DateRules.MonthStart(),
+            self.TimeRules.AfterMarketOpen("SPY"), 
+            self.pair_reselection)
+
+
+        #add risk management model 
+        #self.AddRiskManagement(MyRiskManagementModel)
+        #Pair level: stop loss 
+        #Exceed certain threshold (x std), exit, re-enter when falls back
+        #Embedded in CalculateAndTrade
+
         #5 Selection of universe
         self.universe = self.AddUniverse(self.SelectCoarse, self.SelectFine)
         self.UniverseSettings.Resolution = Resolution.Minute
@@ -98,10 +132,9 @@ class KalmanPairsTrading(QCAlgorithm):
             assets: the portfolio of pairs
                     list of tuples, [(0a,0b),(0c,0d),(0e,0f)], 
         '''
-        self.assets = self.PairFormation()
+        self.assets = self.PairFormation() 
+        #self.MyRiskManagementModel.ManageRisk(self,QCAlgorithm, self.assets)
 
-
-        
         # Add Equity ------------------------------------------------ 
 
         for pair in self.assets:
@@ -118,12 +151,11 @@ class KalmanPairsTrading(QCAlgorithm):
         if self.initialize:
             self.Initialize_2()
             self.initialize=False
+
     def SelectCoarse(self, coarse):
         #coarse = sorted(coarse, key=lambda c:c.DollarVolume, reverse=True)
         symbols = [c.Symbol for c in coarse if c.HasFundamentalData and c.Price<1500]
         return symbols
-    
-    
     
     def SelectFine(self, fine):
         candidates = []
@@ -283,7 +315,20 @@ class KalmanPairsTrading(QCAlgorithm):
         
     def relativeWeight(self,pair):
         total=sum([self.pair_weights[p] for p in self.assets])
-        return (self.pair_weights[pair]/total)
+        return (self.pair_weights[pair]/total)*0.5
+
+    '''def Get_DayEnd_vxv_vix(self):
+        history_vix = self.History(self.vix, 1, Resolution.Daily)
+        history_vxv = self.History(self.vxv, 1, Resolution.Daily)
+        self.vix_dayEnd = history_vix
+        self.vxv_dayEnd = history_vxv
+        
+        self.IVTS_Calculation()
+
+    def IVTS_Calculation(self):
+        self.IVTS = self.vix_dayEnd/self.vxv_dayEnd
+        self.Debug("The IVTS is now" + str(self.IVTS))
+        return ''' 
 
     
     def PairFormation(self): #-> List[Tuple()]:
@@ -301,7 +346,7 @@ class KalmanPairsTrading(QCAlgorithm):
         
         df_price=df_price['close'].unstack(level=0)
 
-        self.Debug(df_price.shape)
+        #self.Debug(df_price.shape)
         pairs=select_pair(df_price, subsample = 30, 
                 min_half_life = self.min_half_life, max_half_life = self.max_half_life,
                 min_zero_crosings = 12,   
@@ -316,7 +361,6 @@ class KalmanPairsTrading(QCAlgorithm):
         return pairs
         
 
-               
 
     def Recalibrate(self) -> None:
         if self.initialize==True:
@@ -388,18 +432,44 @@ class KalmanPairsTrading(QCAlgorithm):
         self.recalibrated_atleast_once[pair] = True
         end=time.time()
       
+
     def CalculateAndTrade(self) -> None:
         if self.initialize==True:
             return
         start = time.time()
+
+        #Performance boost: add IVTS 
+        '''above 1: all to our strategy 
+           below 1: all to SPY '''
+        #self.Debug("The IVTS output by the function is " + str(self.IVTS.Current.Value))
+        '''if self.IVTS > 0.1:
+            # normal market condition <- set to 0.0001 for easier backtest 
+            # if already invested in pairs, liquidate 
+            i=0
+            self.Debug("Enter in the IVTS > 0.0001")
+            for pair in self.assets:
+                if self.pair_trade_states[pair]!= 0:
+                    self.Liquidate(pair[0]) 
+                    self.Liquidate(pair[1])   
+                    self.pair_trade_states[pair] = 0
+                i+=1
+
+            if not self.Portfolio["SPY"].Invested:
+                self.Debug("Buy SPY")
+                CapitalToSPY = self.Portfolio.TotalPortfolioValue*0.8
+                self.MarketOrder("SPY",floor(CapitalToSPY/self.Portfolio["SPY"].Price))
+
+        else: 
+            if self.Portfolio["SPY"].Invested:
+                self.Liquidate("SPY")'''
         i=0
         for pair in self.assets:
             if self.recalibrated_atleast_once[pair] == True:
+                self.Debug("enter into trade")
                 self.PairwiseCalculateAndTrade(pair)
                 i+=1
-            
+        #self.maximum_drawdown_portfolio()
 
-        
         end = time.time()
         #self.Debug("Finished making trading decisions for all pairs"+str(end-start))
 
@@ -407,6 +477,7 @@ class KalmanPairsTrading(QCAlgorithm):
     Call this function for each pair.
     pair: a tuple of two Symbol
     '''
+
     def PairwiseCalculateAndTrade(self, pair):
         start = time.time()
        
@@ -428,52 +499,154 @@ class KalmanPairsTrading(QCAlgorithm):
 
         self.pair_upper_threshold[pair] = np.sqrt(self.pair_curr_var[pair])
         
-        # Mean-reversion
-        if self.pair_trade_states[pair]==0 and normalized_spread < -self.z_score_trade_threshold*self.pair_upper_threshold[pair]:
-      
-            capital = self.relativeWeight(pair)*self.Portfolio.TotalPortfolioValue
-            ratio = abs(self.pair_hedge_ratio[pair][1]/self.pair_hedge_ratio[pair][0])
-            if ratio>1:
-                if abs(floor(capital/self.Portfolio[pair[1]].Price))>=1 and abs(floor(((1/ratio)*capital)/self.Portfolio[pair[0]].Price))>=1:
-                    s= self.Sell(pair[1],floor(capital/self.Portfolio[pair[1]].Price))
-                    b=self.Buy(pair[0],floor(((1/ratio)*capital)/self.Portfolio[pair[0]].Price))
-                    self.pair_trade_states[pair] = 1
-            else:
-                if abs(floor(ratio*capital/self.Portfolio[pair[1]].Price))>=1 and abs(floor(capital/self.Portfolio[pair[0]].Price))>=1:
-                    s=self.Sell(pair[1],floor(ratio*capital/self.Portfolio[pair[1]].Price))
-                    b=self.Buy(pair[0],floor(capital/self.Portfolio[pair[0]].Price))
-                    self.pair_trade_states[pair] = 1
-        
-        elif self.pair_trade_states[pair]==0 and normalized_spread > self.z_score_trade_threshold*self.pair_upper_threshold[pair]:
+        # Mean-reversion ''with RM - pair wise impletmented here 
+        if self.pair_trade_states[pair]==0: 
+            if abs(normalized_spread/self.pair_upper_threshold[pair]) > self.divergence_threshold:
+                return; #exceed extreme case - no enter at all 
+            elif normalized_spread/self.pair_upper_threshold[pair] < -self.z_score_trade_threshold:
+                capital = self.relativeWeight(pair)*self.Portfolio.TotalPortfolioValue
+                ratio = abs(self.pair_hedge_ratio[pair][1]/self.pair_hedge_ratio[pair][0])
+                if ratio>1:
+                    if abs(floor(capital/self.Portfolio[pair[1]].Price))>=1 and abs(floor(((1/ratio)*capital)/self.Portfolio[pair[0]].Price))>=1:
+                        orders=[]
+                        orders.append(pair[1],-1*capital)
+                        orders.append(pair[0],(1/ratio)*capital)
+                        #s= self.Sell(pair[1],floor(capital/self.Portfolio[pair[1]].Price))
+                        #b=self.Buy(pair[0],floor(((1/ratio)*capital)/self.Portfolio[pair[0]].Price))
+                        self.pair_trade_states[pair] = 1
+                else:
+                    if abs(floor(ratio*capital/self.Portfolio[pair[1]].Price))>=1 and abs(floor(capital/self.Portfolio[pair[0]].Price))>=1:
+                        orders=[]
+                        orders.append(pair[1],ratio*capital)
+                        orders.append(pair[0],capital)
+                        #s=self.Sell(pair[1],floor(ratio*capital/self.Portfolio[pair[1]].Price))
+                        #b=self.Buy(pair[0],floor(capital/self.Portfolio[pair[0]].Price))
+                        self.pair_trade_states[pair] = 1
+            elif normalized_spread/self.pair_upper_threshold[pair] > self.z_score_trade_threshold:
+                capital = self.relativeWeight(pair)*self.Portfolio.TotalPortfolioValue
+                ratio = abs(self.pair_hedge_ratio[pair][1]/self.pair_hedge_ratio[pair][0])
+                if ratio>1:
+                    if abs(floor(((1/ratio)*capital)/self.Portfolio[pair[0]].Price))>=1 and abs(floor(capital/self.Portfolio[pair[1]].Price))>=1:
+                        orders=[]
+                        orders.append(pair[1],(1/ratio)*capital)
+                        orders.append(pair[0],capital)
+                        
+                        #s = self.Sell(pair[0],floor(((1/ratio)*capital)/self.Portfolio[pair[0]].Price))
+                        #b=self.Buy(pair[1],floor(capital/self.Portfolio[pair[1]].Price))
+                        self.pair_trade_states[pair] = -1
+                else:
+                    if abs(floor(capital/self.Portfolio[pair[0]].Price))>=1 and abs(floor(ratio*capital/self.Portfolio[pair[1]].Price))>=1:
+                        orders=[]
+                        orders.append(pair[1],capital)
+                        orders.append(pair[0],ratio*capital)
+                        #s=self.Sell(pair[0],floor(capital/self.Portfolio[pair[0]].Price))
+                        #b=self.Buy(pair[1],floor(ratio*capital/self.Portfolio[pair[1]].Price))
+                        
+                        self.pair_trade_states[pair] = -1
 
-            capital = self.relativeWeight(pair)*self.Portfolio.TotalPortfolioValue
-            ratio = abs(self.pair_hedge_ratio[pair][1]/self.pair_hedge_ratio[pair][0])
-            if ratio>1:
-                if abs(floor(((1/ratio)*capital)/self.Portfolio[pair[0]].Price))>=1 and abs(floor(capital/self.Portfolio[pair[1]].Price))>=1:
-                    s = self.Sell(pair[0],floor(((1/ratio)*capital)/self.Portfolio[pair[0]].Price))
-                    b=self.Buy(pair[1],floor(capital/self.Portfolio[pair[1]].Price))
-                    self.pair_trade_states[pair] = -1
-            else:
-                if abs(floor(capital/self.Portfolio[pair[0]].Price))>=1 and abs(floor(ratio*capital/self.Portfolio[pair[1]].Price))>=1:
-                    
-                    s=self.Sell(pair[0],floor(capital/self.Portfolio[pair[0]].Price))
-                    b=self.Buy(pair[1],floor(ratio*capital/self.Portfolio[pair[1]].Price))
-                    
-                    self.pair_trade_states[pair] = -1
-            
-            
-            
-                
-        # Out of position if spread recovered
-        elif (self.pair_trade_states[pair] == 1 and normalized_spread > -self.z_score_exit_threshold*self.pair_upper_threshold[pair]) or (self.pair_trade_states[pair] == -1 and normalized_spread < self.z_score_exit_threshold*self.pair_upper_threshold[pair]):
-
+        # Out of position if spread recovered / get too extreme 
+        elif abs(normalized_spread/self.pair_upper_threshold[pair] < self.z_score_exit_threshold) or abs(normalized_spread/self.pair_upper_threshold[pair]) > self.divergence_threshold:
             self.Liquidate(pair[0]) 
             self.Liquidate(pair[1])   
             self.pair_trade_states[pair] = 0
-        
-        
+            if abs(normalized_spread/self.pair_upper_threshold[pair]) > self.divergence_threshold:
+                self.assets.remove(pair) # remove the pair - lost faith 
+
+        #self.checkNakedLeg(pair)
+        #self.stopLoss_pairCheck(pair) 
         end=time.time()
         #self.Debug("------ Finsihed calculating Spreads and trading, takes"+str(end-start))
                     
         
         #self.Debug("----------------------------------------------")
+
+    def checkNakedLeg(self, pair)-> None: 
+        if self.Portfolio[pair[0]].Invested and self.Portfolio[pair[1]].Invested:
+            return
+        elif (self.Portfolio[pair[0]].Invested and (not self.Portfolio[pair[1]].Invested)):
+            self.Liquidate(pair[0])
+            self.pair_trade_states[pair] = 0
+        elif (self.Portfolio[pair[1]].Invested and (not self.Portfolio[pair[0]].Invested)):
+            self.Liquidate(pair[1])
+            self.pair_trade_states[pair] = 0 
+
+    def stopLoss_pairCheck(self,pair):
+        if not self.Portfolio.Invested:
+            return 
+        if self.Portfolio[pair[1]].UnrealizedProfitPercent <= - self.stopLossPercentage or self.Portfolio[pair[0]].UnrealizedProfitPercent <= - self.stopLossPercentage:
+            self.Liquidate(pair[1]) 
+            self.Liquidate(pair[0])   
+            self.pair_trade_states[pair] = 0
+            return
+
+    def maximum_drawdown_portfolio(self):
+        if not self.Portfolio.Invested:
+            return 
+        #trailing on 
+        if self.portfolioHigh < self.currentValue:
+            self.portfolioHigh = self.currentValue
+        if self.GetTotalDrawdownPercent() <= - self.maxDDpct:
+            self.Liquidate() 
+            self.initialised = False
+            return 
+
+    def GetTotalDrawdownPercent(self):
+        return (float(self.currentValue) / float(self.portfolioHigh)) - 1.0 
+
+
+    def pair_reselection(self):
+        self.month_counter+=1
+        # do nothing if not the right time
+        if self.month_counter%self.reselect_interval!=0:
+            return
+        new_pairs = self.PairFormation()
+        self.Debug("The new pairs selected are:")
+        for i in new_pairs:
+            self.Debug(str(i[0])+" "+str(i[1]))
+
+        for oldpair in self.assets:
+            self.pair_weights[oldpair]=0
+            self.pair_trade_states[oldpair]=0
+            self.Liquidate(oldpair[0])
+            self.Liquidate(oldpair[1])
+        
+        self.assets.clear()       
+                    
+        for newpair in new_pairs:
+            self.assets.append(newpair)
+            self.pair_trade_states[newpair]=0
+            self.recalibrated_atleast_once[newpair] = False
+            self.AddEquity(newpair[0],Resolution.Minute)
+            self.AddEquity(newpair[1],Resolution.Minute)
+            self.pair_weights[newpair] = 1
+
+
+#class MyRiskManagementModel(RiskManagementModel):
+    # Adjust the portfolio targets and return them. If no changes emit nothing.
+
+    #def RM_PairwiseCalculateAndTrade(self, pair):
+        #start = time.time()
+        # Mean-reversion
+        #if self.pair_trade_states[pair]!=0 and abs(normalized_spread/self.pair_upper_threshold[pair]) < self.divergence_threshold:
+            #return # do nothing if extreme divergence is not observed 
+       # elif self.pair_trade_states[pair]!=0 and abs(normalized_spread/self.pair_upper_threshold[pair]) < self.divergence_threshold:
+            #if the pair is opened and extreme divergence is observsed 
+           #self.Liquidate(pair[0]) 
+            #self.Liquidate(pair[1]) 
+            #self.pair_trade_states[pair] = 0
+            #liquidate position
+        #end=time.time()
+
+    #def ManageRisk(self, algorithm: QCAlgorithm, targets):
+        # Pair-level 1 
+        #start = time.time()
+       #i=0
+        #for pair in targets:
+            #MyRiskManagementModel.RM_PairwiseCalculateAndTrade(pair)
+            #i+=1
+       #end = time.time()
+        #return targets 
+
+    
+
+
