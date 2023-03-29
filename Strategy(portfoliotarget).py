@@ -509,8 +509,8 @@ class KalmanPairsTrading(QCAlgorithm):
                 if ratio>1:
                     if abs(floor(capital/self.Portfolio[pair[1]].Price))>=1 and abs(floor(((1/ratio)*capital)/self.Portfolio[pair[0]].Price))>=1:
                         orders=[]
-                        orders.append(pair[1],-1*self.relativeWeight(pair))
-                        orders.append(pair[0],(1/ratio)*self.relativeWeight(pair))
+                        orders.append(PortfolioTarget(pair[1],-1*self.relativeWeight(pair)))
+                        orders.append(PortfolioTarget(pair[0],(1/ratio)*self.relativeWeight(pair)))
                         self.SetHoldings(orders)
                         #s= self.Sell(pair[1],floor(capital/self.Portfolio[pair[1]].Price))
                         #b=self.Buy(pair[0],floor(((1/ratio)*capital)/self.Portfolio[pair[0]].Price))
@@ -518,8 +518,8 @@ class KalmanPairsTrading(QCAlgorithm):
                 else:
                     if abs(floor(ratio*capital/self.Portfolio[pair[1]].Price))>=1 and abs(floor(capital/self.Portfolio[pair[0]].Price))>=1:
                         orders=[]
-                        orders.append(pair[1],-1*ratio*self.relativeWeight(pair))
-                        orders.append(pair[0],self.relativeWeight(pair))
+                        orders.append(PortfolioTarget(pair[1],-1*ratio*self.relativeWeight(pair)))
+                        orders.append(PortfolioTarget(pair[0],self.relativeWeight(pair)))
                         #s=self.Sell(pair[1],floor(ratio*capital/self.Portfolio[pair[1]].Price))
                         #b=self.Buy(pair[0],floor(capital/self.Portfolio[pair[0]].Price))
                         self.SetHoldings(orders)
@@ -530,8 +530,8 @@ class KalmanPairsTrading(QCAlgorithm):
                 if ratio>1:
                     if abs(floor(((1/ratio)*capital)/self.Portfolio[pair[0]].Price))>=1 and abs(floor(capital/self.Portfolio[pair[1]].Price))>=1:
                         orders=[]
-                        orders.append(pair[1],(1/ratio)*self.relativeWeight(pair))
-                        orders.append(pair[0],-1*self.relativeWeight(pair))
+                        orders.append(PortfolioTarget(pair[1],(1/ratio)*self.relativeWeight(pair)))
+                        orders.append(PortfolioTarget(pair[0],-1*self.relativeWeight(pair)))
                         self.SetHoldings(orders)
                         #s = self.Sell(pair[0],floor(((1/ratio)*capital)/self.Portfolio[pair[0]].Price))
                         #b=self.Buy(pair[1],floor(capital/self.Portfolio[pair[1]].Price))
@@ -539,8 +539,8 @@ class KalmanPairsTrading(QCAlgorithm):
                 else:
                     if abs(floor(capital/self.Portfolio[pair[0]].Price))>=1 and abs(floor(ratio*capital/self.Portfolio[pair[1]].Price))>=1:
                         orders=[]
-                        orders.append(pair[1],self.relativeWeight(pair))
-                        orders.append(pair[0],-1*ratio*self.relativeWeight(pair))
+                        orders.append(PortfolioTarget(pair[1],self.relativeWeight(pair)))
+                        orders.append(PortfolioTarget(pair[0],-1*ratio*self.relativeWeight(pair)))
                         #s=self.Sell(pair[0],floor(capital/self.Portfolio[pair[0]].Price))
                         #b=self.Buy(pair[1],floor(ratio*capital/self.Portfolio[pair[1]].Price))
                         self.SetHoldings(orders)
@@ -649,6 +649,7 @@ class KalmanPairsTrading(QCAlgorithm):
        #end = time.time()
         #return targets 
 
+    
     
 
 
