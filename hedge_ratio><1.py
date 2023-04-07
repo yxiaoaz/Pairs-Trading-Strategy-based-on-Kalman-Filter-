@@ -4,7 +4,6 @@ from QuantConnect.DataSource import *
 from arch.unitroot.cointegration import engle_granger
 from pykalman import KalmanFilter
 from scipy.optimize import minimize
-from statsmodels.tsa.vector_ar.vecm import VECM
 from functools import partial
 import numpy as np
 from math import floor
@@ -13,33 +12,11 @@ from Select_Pair_main import *
 from pandas.plotting import register_matplotlib_converters
 from copy import deepcopy
 import time
-register_matplotlib_converters()
+register_matplotlib_converters()#/home/lean-user/workspace/project
 # endregion
-class MySecurityInitializer(BrokerageModelSecurityInitializer):
 
-    def __init__(self, brokerage_model: IBrokerageModel, security_seeder: ISecuritySeeder) -> None:
-        super().__init__(brokerage_model, security_seeder)
-
-    def Initialize(self, security: Security) -> None:
-        # First, call the superclass definition
-        # This method sets the reality models of each security using the default reality models of the brokerage model
-        super().Initialize(security)
-
-        # Next, overwrite some of the reality models        
-        security.SetBuyingPowerModel(SecurityMarginModel(4))
 class KalmanPairsTrading(QCAlgorithm):
-    '''
-    1. Shorter backtesting time
-    2. BeforeMarketClose
-    3. Cap on stock price e.g. <1500
-    4. Order Type 
-     
-    '''
-    '''
-    TODO: 
-            PairFormation-> List[Tuple()], generate the pairs
-            Incorporate weights into CalculateAndTrade
-    '''
+
     def Initialize(self) -> None:
         '''
         Changeable Parameters for TESTING
@@ -48,15 +25,25 @@ class KalmanPairsTrading(QCAlgorithm):
         #industry_candidate_metric = market_cap   adjust manually
         self.pair_ranking_metric = 'p_value'# other: 'hurst_exponent', 'zero_cross', 'half_life','critical_val'
         self.pair_ranking_order = False # p_value:False, 
-        self.num_pairs = 5 #how many number of pairs to include in trading
+        self.num_pairs = 5 #how many number of pairs to include in trading 
         self.buffer_size = 0.4 # portion of position to be left as buffer
-        self.Settings.FreePortfolioValuePercentage = 0.1
+        #self.Settings.FreePortfolioValuePercentage = 0.1
         self.min_half_life = 1
         self.max_half_life = floor(252)
         self.formation_period = 252*2
-        self.shuffle_pair_interval_month = 6 # intervals between two shuffling of pairs
-        ''''''
-        #
+        #risk management 
+        self.divergence_threshold = 5 
+        #self.maxDDpct = 0.5
+        #self.stopLossPercentage = 0.1
+        #self.currentValue = self.Portfolio.TotalPortfolioValue
+        #self.initialize = False
+        #if not self.initialize: 
+            #self.portfolioHigh = self.currentValue
+
+        #rolling 
+        self.month_counter = 0 # will +1 after every month
+        self.reselect_interval = 6  #reselect pairs every 12 months
+
         #Recorders for pairs
         self.recalibrated_atleast_once={}
         self.pair_weights={} #record the absolute weight of each pair
@@ -67,17 +54,16 @@ class KalmanPairsTrading(QCAlgorithm):
         self.pair_curr_mean={}
         self.pair_curr_var={}
         self.pair_upper_threshold={}
-        self.z_score_trade_threshold= self.GetParameter("entry-z", 2)# to be multipled by upper_threshold
-        self.z_score_exit_threshold=self.GetParameter("exit-z",0)
-        
-        
+        self.z_score_trade_threshold=2 #self.GetParameter("entry-z", 2)
+        self.z_score_exit_threshold=0#self.GetParameter("exit-z",0)
+    
         
         self.initialize = True # a workaround for getting data...
         self.first_time_form_pair = True
         self.null_value_counts = {}
-        #1. Backtesting starting point
-        self.SetStartDate(2016, 1, 1)
-        self.SetEndDate(2019 ,12, 31)  
+        self.TradeStartYear = self.GetParameter("TradeStartYear",2010)
+        self.SetStartDate(self.TradeStartYear, 1, 1)
+        self.SetEndDate(self.TradeStartYear+8,1, 1)  #<--------changed!!!!!!!!!!! to be only half yr for testing purpose 
         #2. Required: Alpha Streams Models:
         self.SetBrokerageModel(BrokerageName.AlphaStreams)
 
@@ -91,91 +77,72 @@ class KalmanPairsTrading(QCAlgorithm):
         self.AddEquity("SPY",Resolution.Minute)
         self.SetBenchmark("SPY")
 
+        '''# Crisis indicator 
+        self.vix = self.AddData(CBOE, 'VIX', Resolution.Daily).Symbol
+        self.vxv = self.AddData(CBOE, 'VIX3M', Resolution.Daily).Symbol
+        
+        self.vix_dayEnd = 1
+        self.vxv_dayEnd = 1
+
+        self.IVTS = 1 '''
 
         # Set Scheduled Event Method For Kalman Filter updating.
         self.Schedule.On(self.DateRules.MonthStart(), 
             self.TimeRules.BeforeMarketClose("SPY"), 
             self.Recalibrate)
 
-         #Set Scheduled Event Method For Making Trading Decision.
-        
-        
+        '''#Set Scheduled Event Method For Making Trading Decision. 
         self.Schedule.On(self.DateRules.EveryDay("SPY"), 
-            self.TimeRules.BeforeMarketClose("SPY",5), 
-            self.CalculateAndTrade)
-        '''
-        self.Schedule.On(self.DateRules.EveryDay("SPY"),
-                 self.TimeRules.AfterMarketOpen("SPY",120),
-                 self.CalculateAndTrade)
+            self.TimeRules.BeforeMarketClose("SPY"), 
+            self.Get_DayEnd_vxv_vix)'''
+            
 
-        '''
+        lagBeforeClose = self.GetParameter("lagBeforeClose",5)
+
+        self.Schedule.On(self.DateRules.EveryDay("SPY"), 
+            self.TimeRules.BeforeMarketClose("SPY",lagBeforeClose), 
+            self.CalculateAndTrade) #<-------Calculate and trade called here
         
-        
-        # Set Scheduled Event Method For Rebalancing Weights (only for weight_scheme = "value-weighted")
-        
-        '''
-        self.Schedule.On(self.DateRules.WeekEnd(),
-            self.TimeRules.AfterMarketOpen("SPY"),
-            self.RebalanceWeights)
-        '''
-        # Set Scheduled Event Method For Reforming Pairs.
-        '''
-        self.month_passed = 0
         self.Schedule.On(self.DateRules.MonthStart(),
-            self.TimeRules.AfterMarketOpen("SPY"),
-            self.ShufflePairs)
-        '''
-        
-        
+            self.TimeRules.AfterMarketOpen("SPY"), 
+            self.pair_reselection)
+
+
+        #add risk management model 
+        #self.AddRiskManagement(MyRiskManagementModel)
+        #Pair level: stop loss 
+        #Exceed certain threshold (x std), exit, re-enter when falls back
+        #Embedded in CalculateAndTrade
+
         #5 Selection of universe
-        #self.universe =self.AddUniverse(self.SelectCoarse)
-        self.Debug("Universe selection starts")
-        start = time.time()
         self.universe = self.AddUniverse(self.SelectCoarse, self.SelectFine)
-        end = time.time()
-        self.Debug("Universe filtering ends, takes "+str(end-start)+" seconds")
         self.UniverseSettings.Resolution = Resolution.Minute
         self.SetBrokerageModel(AlphaStreamsBrokerageModel())
         #self.SetSecurityInitializer(MySecurityInitializer(self.BrokerageModel, FuncSecuritySeeder(self.GetLastKnownPrices)))
-        self.to_be_removed = []  # Stack for storing securities to be removed from universe between two reshufflings
         
     def Initialize_2(self):
         
         self.candidates = [kvp.Key for kvp in 
                         self.UniverseManager[self.universe.Configuration.Symbol].Members]
-        #self.Debug(self.candidates)
-        #self.Debug("===================================Refomed Pairs===================================")
-        #self.Log("[")
+
         for i in self.candidates:
-            #self.Log("\'"+i.Value+"\'"+",")
             self.AddEquity(i,Resolution.Hour)
-        #self.Log("]")
         '''
             Specify which assets' data are of our interest
             assets: the portfolio of pairs
                     list of tuples, [(0a,0b),(0c,0d),(0e,0f)], 
         '''
-        self.Debug("Pair formation starts")
-        start = time.time()
-        self.assets = self.PairFormation()
-        end = time.time()
-        self.Debug("Pair formation ends, takes "+str(end-start)+" seconds")
+        self.assets = self.PairFormation() 
+        #self.MyRiskManagementModel.ManageRisk(self,QCAlgorithm, self.assets)
 
-        
         # Add Equity ------------------------------------------------ 
-        '''
-        for i in range(len(self.assets)):
-            self.AddEquity(self.assets[i],  inute)
-        '''
+
         for pair in self.assets:
-            #self.AddEquity(pair[0], Resolution.Minute)
-            #self.AddEquity(pair[1], Resolution.Minute)
             self.pair_trade_states[pair] = 0 # Set a variable to indicate the trading bias of the portfolio
             self.recalibrated_atleast_once[pair] = False
             self.AddEquity(pair[0],Resolution.Minute)
             self.AddEquity(pair[1],Resolution.Minute)
             self.pair_weights[pair] = 1
-            self.null_value_counts[pair] = 0
         # Instantiate our model
         self.Recalibrate()
 
@@ -184,58 +151,11 @@ class KalmanPairsTrading(QCAlgorithm):
         if self.initialize:
             self.Initialize_2()
             self.initialize=False
+
     def SelectCoarse(self, coarse):
         #coarse = sorted(coarse, key=lambda c:c.DollarVolume, reverse=True)
         symbols = [c.Symbol for c in coarse if c.HasFundamentalData and c.Price<1500]
         return symbols
-    
-    def OnSecuritiesChanged(self, changes: SecurityChanges) -> None:
-        for security in changes.RemovedSecurities:
-            self.to_be_removed.append(security.Symbol)
-    '''
-    def ShufflePairs(self):
-        self.month_passed+=1
-
-        #check if it's the right time to shuffle pairs
-        if self.month_passed == self.shuffle_pair_interval_month:
-            old_assets = deepcopy(self.assets) # temporarily store the pairs of last formation period
-            self.Initialize_2() # reshuffle self.assets
-
-            #liquidate existing pairs
-            for pair in self.assets:
-                if pair in old_assets:
-                    continue
-                else:
-                    self.pair_trade_states[pair] = 0 # Set a variable to indicate the trading bias of the portfolio
-                    self.recalibrated_atleast_once[pair] = False
-                    self.pair_weights[pair] = 1
-            
-            # for old pairs that are not in position, delete their records
-            for old_pair in old_assets:
-                
-                if old_pair not in self.assets:
-                    if self.pair_trade_states[old_pair]==0:
-                        self.Debug("Pair reformed, old pairs that are not in position need to be dumped!")
-                        self.Debug("Liquidate "+old_pair[0]+", "+old_pair[1])
-                        self.Liquidate(old_pair[0])
-                        self.Liquidate(old_pair[1])
-                        del self.pair_trade_states[old_pair]
-                        del self.recalibrated_atleast_once[old_pair]
-                        del self.pair_weights[old_pair]
-                        del self.pair_hedge_ratio[old_pair]
-                        del self.pair_kf_model[old_pair]
-                        del self.pair_curr_mean[old_pair]
-                        del self.pair_curr_var[old_pair]
-                        del self.pair_upper_threshold[old_pair]
-                    else:
-                        self.assets.append(old_pair)
-                        if old_pair[0] in self.to_be_removed:
-                            self.Debug("!!!!!!!!!!!!!!Manually add "+old_pair[0]+" to universe !!!!!!!!!!!!!!!!!!")
-                            self.AddEquity(old_pair[0],Resolution.Daily)
-                        if old_pair[1] in self.to_be_removed:    
-                            self.Debug("!!!!!!!!!!!!!!Manually add "+old_pair[1]+" to universe !!!!!!!!!!!!!!!!!!")
-                            self.AddEquity(old_pair[1],Resolution.Daily)
-    '''
     
     def SelectFine(self, fine):
         candidates = []
@@ -394,46 +314,30 @@ class KalmanPairsTrading(QCAlgorithm):
         return candidates
         
     def relativeWeight(self,pair):
-        # for "committed": only need to call once
-        total=sum([self.pair_weights[p] for p in self.assets])#*(1-self.buffer_size)
-        #self.Debug("The relative weight of pair:"+pair[0]+" "+pair[1]+" is "+str(self.pair_weights[pair]/total))
-        return (self.pair_weights[pair]/total)
-    
-    '''
-    # for "value-weighted" weight scheme only
-    # rebalance the weight of each pair by *(1+Weekly return)
-    # Weekly return = Position*Weekly price change of both assets in the pair
-    def RebalanceWeights(self):
-        if self.weight_scheme=="value weighted":
-            self.Debug("--==--==--==--==--==Rebalancing Weight since we are in value weighted mode--==--==--==--==--==")
-            for pair in self.assets:
-                price_table = self.History([pair[0],pair[1]], 5,Resolution.Daily)['close'].unstack(level=0)
-                weighted_return = ((self.Portfolio[pair[0]].Quantity * self.Portfolio[pair[0]].Price) /self.Portfolio.TotalPortfolioValue)*((price_table[pair[0]].iloc[-1]-price_table[pair[0]].iloc[-5])/price_table[pair[0]].iloc[-5])+((self.Portfolio[pair[1]].Quantity * self.Portfolio[pair[1]].Price) /self.Portfolio.TotalPortfolioValue)*((price_table[pair[1]].iloc[-1]-price_table[pair[1]].iloc[-5])/price_table[pair[1]].iloc[-5])
-                self.pair_weights[pair]=self.pair_weights[pair]*(1+weighted_return)
-    '''
-    
+        total=sum([self.pair_weights[p] for p in self.assets])
+        return (self.pair_weights[pair]/total)*0.5
+
+    '''def Get_DayEnd_vxv_vix(self):
+        history_vix = self.History(self.vix, 1, Resolution.Daily)
+        history_vxv = self.History(self.vxv, 1, Resolution.Daily)
+        self.vix_dayEnd = history_vix
+        self.vxv_dayEnd = history_vxv
+        
+        self.IVTS_Calculation()
+
+    def IVTS_Calculation(self):
+        self.IVTS = self.vix_dayEnd/self.vxv_dayEnd
+        self.Debug("The IVTS is now" + str(self.IVTS))
+        return ''' 
+
     
     def PairFormation(self): #-> List[Tuple()]:
-        #TODO
-        #csv = self.Download('https://www.dropbox.com/s/jtq7rgea7gyfdml/intraday_etfs.csv?dl=0')
-        '''
-        energy_ETF=["VDE", "USO", "XES", "XOP", "UNG", "ICLN", "ERX","UCO", "AMJ", "BNO", "AMLP", "UGAZ", "TAN","ERY", "SCO", "DGAZ"]
-        metal_ETF=["GLD", "IAU", "SLV", "GDX", "AGQ", "PPLT", "NUGT", "USLV", "UGLD", "JNUG","DUST", "JDST"]
-        tech_ETF=["QQQ", "IGV", "QTEC", "FDN", "FXL", "TECL", "SOXL", "SKYY", "KWEB","TECS", "SOXS"]
-        treasury_ETF=["IEF", "SHY", "TLT", "IEI", "TLH", "BIL", "SPTL","TMF", "SCHO", "SCHR", "SPTS", "GOVT","SHV", "TBT", "TBF", "TMV"]
-        volatility_ETF=["TVIX", "VIXY", "SPLV", "UVXY", "EEMV", "EFAV", "USMV","SVXY"]
-        '''
-        '''
-        universe = [ 'XLK', 'QQQ', 'BANC', 'BBVA', 'BBD', 'BCH', 'BLX', 'BSBR', 'BSAC', 'SAN',
-                    'CIB', 'BXS', 'BAC', 'BOH', 'BMO', 'BK', 'BNS', 'BKU', 'BBT','NBHC', 'OFG',
-                    'BFR', 'CM', 'COF', 'C', 'VLY', 'WFC', 'WAL', 'WBK','RBS', 'SHG', 'STT', 'STL', 'SCNB', 'SMFG', 'STI']
-
-        for i in universe:
-            self.AddEquity(i,Resolution.Daily)
-        '''
+        
         df_price = None
         if self.first_time_form_pair == True:
             df_price = self.History(self.candidates, 
+                datetime(self.TradeStartYear-5, 1, 1), 
+                datetime(self.TradeStartYear-1, 12, 31),
                 Resolution.Daily)
         else:
             df_price = self.History(self.candidates, 
@@ -441,16 +345,8 @@ class KalmanPairsTrading(QCAlgorithm):
                 Resolution.Daily)
         
         df_price=df_price['close'].unstack(level=0)
-        '''
-        Debug
-        '''
-        #self.Debug("The resolution used for pair formation is:")
-        indice = df_price.head(20).index.tolist()
-        #for i in indice:
-            #self.Debug(i)
-        ''''''
-        #self.Debug("Shape of df_price before pair selection: "+str(df_price.shape[0])+" x "+str(df_price.shape[1]))
-        self.Debug(df_price.shape)
+
+        #self.Debug(df_price.shape)
         pairs=select_pair(df_price, subsample = 30, 
                 min_half_life = self.min_half_life, max_half_life = self.max_half_life,
                 min_zero_crosings = 12,   
@@ -459,56 +355,23 @@ class KalmanPairsTrading(QCAlgorithm):
                  pair_ranking_metric = self.pair_ranking_metric,
                  pair_ranking_order=self.pair_ranking_order)
         if len(pairs)==0:
-            #self.Debug("!!!!!!!No Pairs are Found!!!!!!!")
-            self.top_k_per_industry+=10
             self.Initialize()
-        #self.Debug("-------------Pairs formed! ------------------")
-        #self.Debug("The length of the pairs collection is:"+str(len(pairs)))
-        #for i in pairs:
-            #self.Debug("Pair: "+i[0]+"  "+i[1]+'/n')
-        
-        
         self.first_time_form_pair=False
         
         return pairs
         
-        
-        '''return[('DGP', 'SLV', 1), ('DGP', 'UGL', 1), ('DBP', 'DGL', 0), ('DBP', 'USV', 1), ('DGL', 'USV', 1), 
-            ('DBA', 'DBB', 0), 
-            ('DBA', 'UAG', 0),  ('DBB', 'GRU', 1),
-             ('DBB', 'RJA', 1), ('FUD', 'FUE', 0),
-              ('FUE', 'UCI', 1), ('GCC', 'GRU', 0), 
-             ('GCC', 'RJA', 0), ('GCC', 'RJZ', 0), ('UBG', 'UCI', 1), ('DBE', 'GSG', 1), ('DBE', 'RJN', 1)]
-        '''
 
-        #return [('SPY','SHY',1),('DGP', 'SLV', 1)]
-               
 
     def Recalibrate(self) -> None:
         if self.initialize==True:
             return
-        start = time.time()
-        self.Debug("Recalibration of Kalman starts")
-        i=0
         for pair in self.assets:
-            
-            #if self.recalibrated_atleast_once[pair]==False:
-                #self.Debug("First time recalibration for: "+pair[0]+" "+pair[1])
-            start1=time.time()
-            self.Debug("--Recab for pair "+str(i)+" starts")
             self.Recalibrate_pairwise(pair)
-            end1=time.time()
-            i+=1
-        end = time.time()
-        self.Debug("Recalibration for all ends, takes "+str(end-start)+" seconds")
 
-    
     def Recalibrate_pairwise(self,pair):
-        self.Debug("----Retrieving history of past 3 years")
         start = time.time()
         history = self.History(list(pair), 252*3, Resolution.Daily)
         end = time.time()
-        self.Debug("----Retrieval completes, takes "+str(end-start)+" seconds")
         if history.empty: return 
         
         # Select the close column and then call the unstack method
@@ -520,38 +383,14 @@ class KalmanPairsTrading(QCAlgorithm):
         ### Get Cointegration Vectors
         # pair[0].log_price = BETA* pair[1].log_price + constant
         if log_price.empty==True or log_price.isnull().values.any() or len(log_price.shape)!=2 or log_price.shape[1]<2:
-            #self.Debug("&&&&&&&&&&&&& NAN or table is EMPTY&&&&&&&&&&&&&&&")
-            self.null_value_counts[pair]=self.null_value_counts[pair]+1
-            '''
-            if self.null_value_counts[pair]>=10:
-                self.Liquidate(pair[0])
-                self.Liquidate(pair[1])
-                self.assets.remove(pair)
-                del self.pair_trade_states[pair]
-                del self.recalibrated_atleast_once[pair]
-                del self.pair_weights[pair]
-                del self.pair_hedge_ratio[pair]
-                del self.pair_kf_model[pair]
-                del self.pair_curr_mean[pair]
-                del self.pair_curr_var[pair]
-                del self.pair_upper_threshold[pair]
-                '''
             return
         coint_result = engle_granger(log_price.iloc[:, 0], log_price.iloc[:, 1], trend="c", lags=0)
         coint_vector = coint_result.cointegrating_vector[:2]
         
         # Get the spread: spread = pair[0].log_price - BETA* pair[1].log_price
         spread = log_price @ coint_vector
-        #self.Debug("log_price.shape:")
-        #self.Debug(log_price)
-        #self.Debug("coint_vector.shape:")
-        #self.Debug(coint_vector.shape)
+       
         ### Kalman Filter
-        '''
-        Initialize a Kalman Filter. Using the first 20 data points to optimize its initial state. 
-        We assume the market has no regime change so that the transitional matrix and observation matrix is [1].
-        '''
-        self.Debug("----Initializing a KF model")
         start = time.time()
         self.pair_kf_model[pair] = KalmanFilter(transition_matrices = [1],
                             observation_matrices = [1],
@@ -592,57 +431,64 @@ class KalmanPairsTrading(QCAlgorithm):
         self.pair_hedge_ratio[pair] = coint_vector / np.sum(abs(coint_vector))
         self.recalibrated_atleast_once[pair] = True
         end=time.time()
-        self.Debug("----Finished initializing a KF model, takes "+str(end-start)+" seconds")
+      
+
     def CalculateAndTrade(self) -> None:
         if self.initialize==True:
             return
-        self.Debug("Making trading decisions")
         start = time.time()
+
+        #Performance boost: add IVTS 
+        '''above 1: all to our strategy 
+           below 1: all to SPY '''
+        #self.Debug("The IVTS output by the function is " + str(self.IVTS.Current.Value))
+        '''if self.IVTS > 0.1:
+            # normal market condition <- set to 0.0001 for easier backtest 
+            # if already invested in pairs, liquidate 
+            i=0
+            self.Debug("Enter in the IVTS > 0.0001")
+            for pair in self.assets:
+                if self.pair_trade_states[pair]!= 0:
+                    self.Liquidate(pair[0]) 
+                    self.Liquidate(pair[1])   
+                    self.pair_trade_states[pair] = 0
+                i+=1
+
+            if not self.Portfolio["SPY"].Invested:
+                self.Debug("Buy SPY")
+                CapitalToSPY = self.Portfolio.TotalPortfolioValue*0.8
+                self.MarketOrder("SPY",floor(CapitalToSPY/self.Portfolio["SPY"].Price))
+
+        else: 
+            if self.Portfolio["SPY"].Invested:
+                self.Liquidate("SPY")'''
         i=0
         for pair in self.assets:
             if self.recalibrated_atleast_once[pair] == True:
-                self.Debug("--Starts making trading decision for pair "+ str(i))
-                start1=time.time()
+                self.Debug("enter into trade")
                 self.PairwiseCalculateAndTrade(pair)
-                end1=time.time()
-                self.Debug("--Finished making trading decision for this pair, takes "+str(end1-start1))
                 i+=1
-            
+        #self.maximum_drawdown_portfolio()
 
-        
         end = time.time()
-        self.Debug("Finished making trading decisions for all pairs"+str(end-start))
+        #self.Debug("Finished making trading decisions for all pairs"+str(end-start))
 
     '''
     Call this function for each pair.
     pair: a tuple of two Symbol
     '''
+
     def PairwiseCalculateAndTrade(self, pair):
         start = time.time()
-        self.Debug("------ Calculating Spreads and trading")
-        # Get the real-time log close price for all assets and store in a Series
+       
        # Get the real-time log close price for all assets and store in a Series
         series = pd.Series()
         for symbol in pair:
             series[symbol] = np.log(self.Securities[symbol].Price)
-        #self.Debug("xxxxxxx")
-        #self.Debug(series.shape)
-        #self.Debug("-----------------Current pair: "+pair[0]+" "+pair[1]+" -----------------------------")
-        #self.Debug("The normalized coint vectors of the pair are: "+str(self.pair_hedge_ratio[pair][0])+" and "+str(self.pair_hedge_ratio[pair][1]))
-        
+      
         # Get the spread
         spread = np.sum(series * self.pair_hedge_ratio[pair])
-        #self.Debug(spread)
-        #self.Debug(log_price.shape)
-        #self.Debug(self.pair_hedge_ratio[pair].shape)
-        #self.Debug(np.reshape(self.pair_hedge_ratio[pair],(2,1)).shape)
-        
-        #self.Debug("-----------------Current pair: "+pair[0]+" "+pair[1]+" -----------------------------")
-        #self.Debug("The normalized coint vectors of the pair are: "+str(self.pair_hedge_ratio[pair][0])+" and "+str(self.pair_hedge_ratio[pair][1]))
-        # Get the spread
-        #self.Debug("serires.shape="+str(series.shape[0])+"x"+str(series.shape[1]))
-        #self.Debug("hedge ratio.shape="+str(self.pair_hedge_ratio[pair].shape[0])+"x"+str(self.pair_hedge_ratio[pair].shape[1]))
-        
+       
         # Update the Kalman Filter with the Series
         (self.pair_curr_mean[pair], self.pair_curr_var[pair]) = self.pair_kf_model[pair].filter_update(filtered_state_mean = self.pair_curr_mean[pair],
                                                                             filtered_state_covariance = self.pair_curr_var[pair],
@@ -650,177 +496,157 @@ class KalmanPairsTrading(QCAlgorithm):
         
         # Obtain the normalized spread.
         normalized_spread = spread - self.pair_curr_mean[pair]
-        #self.Debug("The normalized spread is: "+str(spread)+" - "+str(self.pair_curr_mean[pair])+" = "+str(normalized_spread))
-        # ==============================
+
         self.pair_upper_threshold[pair] = np.sqrt(self.pair_curr_var[pair])
-        #self.Debug("The std of the spread is: "+str(self.pair_upper_threshold[pair]))
-        #self.Debug("Deviation from mean spread is (z-score): "+str(normalized_spread/self.pair_upper_threshold[pair]))
-        #self.Debug("The current state of this pair is "+str(self.pair_trade_states[pair]))
-        # Mean-reversion
-        if self.pair_trade_states[pair]==0 and normalized_spread < -self.z_score_trade_threshold*self.pair_upper_threshold[pair]:
-           
-            #self.Debug("------>State changed to "+str(1))
-            #self.Debug("Long ")
-            #self.Debug(pair[0])
-            #self.Debug("Short")
-            #self.Debug(pair[1])
-            capital = self.relativeWeight(pair)*self.Portfolio.TotalPortfolioValue
-            ratio = abs(self.pair_hedge_ratio[pair][1]/self.pair_hedge_ratio[pair][0])
-            if ratio>1:
-                if abs(floor(capital/self.Portfolio[pair[1]].Price))>=1 and abs(floor(((1/ratio)*capital)/self.Portfolio[pair[0]].Price))>=1:
-                    s= self.Sell(pair[1],floor(capital/self.Portfolio[pair[1]].Price))
-                    b=self.Buy(pair[0],floor(((1/ratio)*capital)/self.Portfolio[pair[0]].Price))
-                    self.pair_trade_states[pair] = 1
-            else:
-                if abs(floor(ratio*capital/self.Portfolio[pair[1]].Price))>=1 and abs(floor(capital/self.Portfolio[pair[0]].Price))>=1:
-                    s=self.Sell(pair[1],floor(ratio*capital/self.Portfolio[pair[1]].Price))
-                    b=self.Buy(pair[0],floor(capital/self.Portfolio[pair[0]].Price))
-                    self.pair_trade_states[pair] = 1
-            
-            
-            #pair_0_weight + pair_1_weight = weight
-            #abs(pair_0_weight)/abs(pair_1_weight)=ratio
-            # 
-            '''
-            pair_0_weight = (self.relativeWeight(pair)*self.pair_hedge_ratio[pair][1])/(self.pair_hedge_ratio[pair][1]+self.pair_hedge_ratio[pair][0])
-            pair_1_weight = self.relativeWeight(pair)-pair_0_weight
-            if pair_0_weight<0:
-                pair_0_weight, pair_1_weight = pair_1_weight, pair_0_weight
-            self.pair_trade_states[pair] = 1
-            self.Debug("Long 0 short 1")
-            self.Debug("pair_0_weight = ")
-            self.Debug(pair_0_weight)
-            self.Debug("pair_1_weight = ")
-            self.Debug(pair_1_weight)
-            self.SetHoldings(pair[0],pair_0_weight)
-            self.SetHoldings(pair[1],pair_1_weight)
-            '''
-            '''
-            if self.weight_scheme == "equally weighted":
-                self.pair_weights[pair]=1
-            #pair_0_qty = int(self.CalculateOrderQuantity(pair[0], self.relativeWeight(pair)))
-            pair_0_qty = floor(self.relativeWeight(pair)*self.Portfolio.TotalPortfolioValue - self.Portfolio[pair[0]].HoldingsValue)/self.Portfolio[pair[0]].Price
-            ratio = abs(self.pair_hedge_ratio[pair][1]/self.pair_hedge_ratio[pair][0])
-            pair_1_qty = floor(pair_0_qty*ratio)
-            if abs(pair_0_qty)>=1 and abs(pair_1_qty)>=1:
-                self.Debug("Situation a:")
-                self.Debug("----Do Trade----")
-                self.Debug("The quantity to long for "+pair[0]+" is "+str(pair_0_qty))
-                self.Debug("The quantity to short for "+pair[1]+" is "+str(pair_1_qty))
-                short_ticket = self.MarketOrder(pair[1], -pair_1_qty)#self.Sell(pair[1], pair_1_qty)
-                long_ticket = self.MarketOrder(pair[0], pair_0_qty)#self.Buy(pair[0], pair_0_qty)
-                    #orders.append(PortfolioTarget(self.asset_list[i], self.trading_weight[i]))
-                    #self.SetHoldings(orders)
-                self.Debug("ID of short order:"+str(short_ticket.OrderId))
-                self.Debug("ID of long order:"+str(long_ticket.OrderId))
-                self.pair_trade_states[pair] = 1
-            '''    
-        elif self.pair_trade_states[pair]==0 and normalized_spread > self.z_score_trade_threshold*self.pair_upper_threshold[pair]:
-            
-            #self.Debug("------>State changed to "+str(-1))
-            #self.Debug("Long ")
-            #self.Debug(pair[1])
-            #self.Debug("Short")
-            #self.Debug(pair[0])
-            capital = self.relativeWeight(pair)*self.Portfolio.TotalPortfolioValue
-            #self.Debug("The assigned capital is:")
-            #self.Debug(capital)
-            ratio = abs(self.pair_hedge_ratio[pair][1]/self.pair_hedge_ratio[pair][0])
-            if ratio>1:
-                if abs(floor(((1/ratio)*capital)/self.Portfolio[pair[0]].Price))>=1 and abs(floor(capital/self.Portfolio[pair[1]].Price))>=1:
-                    #self.Debug("Try to SHORT ")
-                    #self.Debug(pair[0])
-                    #self.Debug("for "+str((1/ratio)*capital)+"the quantity should be "+str(floor(((1/ratio)*capital)/self.Portfolio[pair[0]].Price)))
-                    s = self.Sell(pair[0],floor(((1/ratio)*capital)/self.Portfolio[pair[0]].Price))
-                    #self.Debug("Actual quantity filled is "+str(s.QuantityFilled))
-                    #self.Debug("Short ordered, the new cash book account is")
-                    #self.Debug(self.Portfolio.Cash)
+        
+        # Mean-reversion ''with RM - pair wise impletmented here 
+        if self.pair_trade_states[pair]==0: 
+            if abs(normalized_spread/self.pair_upper_threshold[pair]) > self.divergence_threshold:
+                return; #exceed extreme case - no enter at all 
+            elif normalized_spread/self.pair_upper_threshold[pair] < -self.z_score_trade_threshold:
+                capital = self.relativeWeight(pair)*self.Portfolio.TotalPortfolioValue
+                ratio = abs(self.pair_hedge_ratio[pair][1]/self.pair_hedge_ratio[pair][0])
+                if ratio>1:
+                    if abs(floor(capital/self.Portfolio[pair[1]].Price))>=1 and abs(floor(((1/ratio)*capital)/self.Portfolio[pair[0]].Price))>=1:
+                        orders=[]
+                        orders.append(PortfolioTarget(pair[1],-1*self.relativeWeight(pair)))
+                        orders.append(PortfolioTarget(pair[0],(1/ratio)*self.relativeWeight(pair)))
+                        self.SetHoldings(orders)
+                        #s= self.Sell(pair[1],floor(capital/self.Portfolio[pair[1]].Price))
+                        #b=self.Buy(pair[0],floor(((1/ratio)*capital)/self.Portfolio[pair[0]].Price))
+                        self.pair_trade_states[pair] = 1
+                else:
+                    if abs(floor(ratio*capital/self.Portfolio[pair[1]].Price))>=1 and abs(floor(capital/self.Portfolio[pair[0]].Price))>=1:
+                        orders=[]
+                        orders.append(PortfolioTarget(pair[1],-1*ratio*self.relativeWeight(pair)))
+                        orders.append(PortfolioTarget(pair[0],self.relativeWeight(pair)))
+                        #s=self.Sell(pair[1],floor(ratio*capital/self.Portfolio[pair[1]].Price))
+                        #b=self.Buy(pair[0],floor(capital/self.Portfolio[pair[0]].Price))
+                        self.SetHoldings(orders)
+                        self.pair_trade_states[pair] = 1
+            elif normalized_spread/self.pair_upper_threshold[pair] > self.z_score_trade_threshold:
+                capital = self.relativeWeight(pair)*self.Portfolio.TotalPortfolioValue
+                ratio = abs(self.pair_hedge_ratio[pair][1]/self.pair_hedge_ratio[pair][0])
+                if ratio>1:
+                    if abs(floor(((1/ratio)*capital)/self.Portfolio[pair[0]].Price))>=1 and abs(floor(capital/self.Portfolio[pair[1]].Price))>=1:
+                        orders=[]
+                        orders.append(PortfolioTarget(pair[1],(1/ratio)*self.relativeWeight(pair)))
+                        orders.append(PortfolioTarget(pair[0],-1*self.relativeWeight(pair)))
+                        self.SetHoldings(orders)
+                        #s = self.Sell(pair[0],floor(((1/ratio)*capital)/self.Portfolio[pair[0]].Price))
+                        #b=self.Buy(pair[1],floor(capital/self.Portfolio[pair[1]].Price))
+                        self.pair_trade_states[pair] = -1
+                else:
+                    if abs(floor(capital/self.Portfolio[pair[0]].Price))>=1 and abs(floor(ratio*capital/self.Portfolio[pair[1]].Price))>=1:
+                        orders=[]
+                        orders.append(PortfolioTarget(pair[1],self.relativeWeight(pair)))
+                        orders.append(PortfolioTarget(pair[0],-1*ratio*self.relativeWeight(pair)))
+                        #s=self.Sell(pair[0],floor(capital/self.Portfolio[pair[0]].Price))
+                        #b=self.Buy(pair[1],floor(ratio*capital/self.Portfolio[pair[1]].Price))
+                        self.SetHoldings(orders)
+                        self.pair_trade_states[pair] = -1
 
-                   
-                    #self.Debug("Try to LONG ")
-                    #self.Debug(pair[1])
-                    #self.Debug("for "+str(capital)+"the quantity should be "+str(floor(capital/self.Portfolio[pair[1]].Price)))
-                    b=self.Buy(pair[1],floor(capital/self.Portfolio[pair[1]].Price))
-                    #self.Debug("Actual quantity filled is "+str(b.QuantityFilled))
-                    #self.Debug("Long ordered, the new cash book account is")
-                    #self.Debug(self.Portfolio.Cash)
-                    self.pair_trade_states[pair] = -1
-            else:
-                if abs(floor(capital/self.Portfolio[pair[0]].Price))>=1 and abs(floor(ratio*capital/self.Portfolio[pair[1]].Price))>=1:
-                    #self.Debug("Try to SHORT ")
-                    #self.Debug(pair[0])
-                    #self.Debug("for "+str(capital)+"the quantity should be "+str(floor(capital/self.Portfolio[pair[0]].Price)))
-                    s=self.Sell(pair[0],floor(capital/self.Portfolio[pair[0]].Price))
-                    #self.Debug("Actual quantity filled is "+str(s.QuantityFilled))
-                    #self.Debug("Short ordered, the new cash book account is")
-                    #self.Debug(self.Portfolio.Cash)
-
-                    #self.Debug("Try to LONG ")
-                    #self.Debug(pair[1])
-                    #self.Debug("for "+str(ratio*capital)+"the quantity should be "+str(floor(ratio*capital/self.Portfolio[pair[1]].Price)))
-                    b=self.Buy(pair[1],floor(ratio*capital/self.Portfolio[pair[1]].Price))
-                    #self.Debug("Actual quantity filled is "+str(b.QuantityFilled))
-                    #self.Debug("Long ordered, the new cash book account is")
-                    #self.Debug(self.Portfolio.Cash)
-                    self.pair_trade_states[pair] = -1
-            
-
-            '''
-            pair_1_weight = (self.relativeWeight(pair)*self.pair_hedge_ratio[pair][0])/(self.pair_hedge_ratio[pair][0]+self.pair_hedge_ratio[pair][1])
-            pair_0_weight = self.relativeWeight(pair)-pair_1_weight
-            if pair_1_weight<0:
-                pair_0_weight, pair_1_weight = pair_1_weight, pair_0_weight
-            self.SetHoldings(pair[0],pair_0_weight)
-            self.SetHoldings(pair[1],pair_1_weight)
-            self.Debug("Long 1 short 0")
-            self.pair_trade_states[pair] = -1
-            self.Debug("pair_0_weight = ")
-            self.Debug(pair_0_weight)
-            self.Debug("pair_1_weight = ")
-            self.Debug(pair_1_weight)
-            '''
-            '''
-            #orders = []
-            #for i in range(len(self.assets)):
-                #orders.append(PortfolioTarget(self.asset_list[i], -1 * self.trading_weight[i]))
-                #self.SetHoldings(orders)
-            
-            if self.weight_scheme == "equally weighted":
-                self.pair_weights[pair]=1
-            #pair_1_qty = int(self.CalculateOrderQuantity(pair[1], self.relativeWeight(pair)))
-            pair_1_qty = floor(self.relativeWeight(pair)*self.Portfolio.TotalPortfolioValue - self.Portfolio[pair[1]].HoldingsValue)/self.Portfolio[pair[1]].Price
-            ratio = abs(self.pair_hedge_ratio[pair][0]/self.pair_hedge_ratio[pair][1])
-            pair_0_qty = floor(ratio*pair_1_qty)
-            if abs(pair_0_qty)>=1 and abs(pair_1_qty)>=1:
-                self.Debug("Situation b:")
-                self.Debug("----Do Trade----")
-                self.Debug("The quantity to long for "+pair[1]+" is "+str(pair_1_qty))
-                self.Debug("The quantity to short for "+pair[0]+" is "+str(pair_0_qty))
-                short_ticket=self.MarketOrder(pair[0], -pair_0_qty)#self.Sell(pair[0], pair_0_qty)
-                long_ticket=self.MarketOrder(pair[1], pair_1_qty)#self.Buy(pair[1], pair_1_qty)
-                self.Debug("ID of short order:"+str(short_ticket.OrderId))
-                self.Debug("ID of long order:"+str(long_ticket.OrderId))
-                self.pair_trade_states[pair] = -1
-            '''
-            
-            
-                
-        # Out of position if spread recovered
-        elif (self.pair_trade_states[pair] == 1 and normalized_spread > -self.z_score_exit_threshold*self.pair_upper_threshold[pair]) or (self.pair_trade_states[pair] == -1 and normalized_spread < self.z_score_exit_threshold*self.pair_upper_threshold[pair]):
-            #self.Liquidate()
-            #self.Debug("Situation c:")
-            #self.Debug("!!!Liquidate state changed to ------>"+str(0))
+        # Out of position if spread recovered / get too extreme 
+        elif abs(normalized_spread/self.pair_upper_threshold[pair] < self.z_score_exit_threshold) or abs(normalized_spread/self.pair_upper_threshold[pair]) > self.divergence_threshold:
             self.Liquidate(pair[0]) 
             self.Liquidate(pair[1])   
             self.pair_trade_states[pair] = 0
-        
-        
+            if abs(normalized_spread/self.pair_upper_threshold[pair]) > self.divergence_threshold:
+                self.assets.remove(pair) # remove the pair - lost faith 
+
+        #self.checkNakedLeg(pair)
+        #self.stopLoss_pairCheck(pair) 
         end=time.time()
-        self.Debug("------ Finsihed calculating Spreads and trading, takes"+str(end-start))
+        #self.Debug("------ Finsihed calculating Spreads and trading, takes"+str(end-start))
                     
         
         #self.Debug("----------------------------------------------")
 
-        #"committed"-> equal weight for all pair
-                                         #"equally weighted" -> equal weight among OPEN pairs
-                                         #"value weighted" ->  wpt=wpt–1(1+rpt–1) for ALL pairs
+    def checkNakedLeg(self, pair)-> None: 
+        if self.Portfolio[pair[0]].Invested and self.Portfolio[pair[1]].Invested:
+            return
+        elif (self.Portfolio[pair[0]].Invested and (not self.Portfolio[pair[1]].Invested)):
+            self.Liquidate(pair[0])
+            self.pair_trade_states[pair] = 0
+        elif (self.Portfolio[pair[1]].Invested and (not self.Portfolio[pair[0]].Invested)):
+            self.Liquidate(pair[1])
+            self.pair_trade_states[pair] = 0 
+
+    def stopLoss_pairCheck(self,pair):
+        if not self.Portfolio.Invested:
+            return 
+        if self.Portfolio[pair[1]].UnrealizedProfitPercent <= - self.stopLossPercentage or self.Portfolio[pair[0]].UnrealizedProfitPercent <= - self.stopLossPercentage:
+            self.Liquidate(pair[1]) 
+            self.Liquidate(pair[0])   
+            self.pair_trade_states[pair] = 0
+            return
+
+    def maximum_drawdown_portfolio(self):
+        if not self.Portfolio.Invested:
+            return 
+        #trailing on 
+        if self.portfolioHigh < self.currentValue:
+            self.portfolioHigh = self.currentValue
+        if self.GetTotalDrawdownPercent() <= - self.maxDDpct:
+            self.Liquidate() 
+            self.initialised = False
+            return 
+
+    def GetTotalDrawdownPercent(self):
+        return (float(self.currentValue) / float(self.portfolioHigh)) - 1.0 
+
+
+    def pair_reselection(self):
+        self.month_counter+=1
+        # do nothing if not the right time
+        if self.month_counter%self.reselect_interval!=0:
+            return
+        new_pairs = self.PairFormation()
+        self.Debug("The new pairs selected are:")
+        for i in new_pairs:
+            self.Debug(str(i[0])+" "+str(i[1]))
+
+        for oldpair in self.assets:
+            self.pair_weights[oldpair]=0
+            self.pair_trade_states[oldpair]=0
+            self.Liquidate(oldpair[0])
+            self.Liquidate(oldpair[1])
+        
+        self.assets.clear()       
+                    
+        for newpair in new_pairs:
+            self.assets.append(newpair)
+            self.pair_trade_states[newpair]=0
+            self.recalibrated_atleast_once[newpair] = False
+            self.AddEquity(newpair[0],Resolution.Minute)
+            self.AddEquity(newpair[1],Resolution.Minute)
+            self.pair_weights[newpair] = 1
+
+
+#class MyRiskManagementModel(RiskManagementModel):
+    # Adjust the portfolio targets and return them. If no changes emit nothing.
+
+    #def RM_PairwiseCalculateAndTrade(self, pair):
+        #start = time.time()
+        # Mean-reversion
+        #if self.pair_trade_states[pair]!=0 and abs(normalized_spread/self.pair_upper_threshold[pair]) < self.divergence_threshold:
+            #return # do nothing if extreme divergence is not observed 
+       # elif self.pair_trade_states[pair]!=0 and abs(normalized_spread/self.pair_upper_threshold[pair]) < self.divergence_threshold:
+            #if the pair is opened and extreme divergence is observsed 
+           #self.Liquidate(pair[0]) 
+            #self.Liquidate(pair[1]) 
+            #self.pair_trade_states[pair] = 0
+            #liquidate position
+        #end=time.time()
+
+    #def ManageRisk(self, algorithm: QCAlgorithm, targets):
+        # Pair-level 1 
+        #start = time.time()
+       #i=0
+        #for pair in targets:
+            #MyRiskManagementModel.RM_PairwiseCalculateAndTrade(pair)
+            #i+=1
+       #end = time.time()
+        #return targets 
+
+    
